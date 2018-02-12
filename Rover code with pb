@@ -1,0 +1,120 @@
+//
+//  Tank_Test.c
+//
+//
+//  Created by Jeremiah McCutcheon on 2/11/18.
+//
+// MSP430 tank control test
+
+/*
+
+ HW I/O assignments:
+ P1.0    not used
+ P1.1    not used
+ P1.2    not used
+ P1.3    PUSHBUTTON  // used for testing
+ P1.4    not used
+ P1.5    not used
+ P1.6    not used
+ P1.7    not used
+
+ P2.0    ENA
+ P2.1    IN1
+ P2.2    IN2
+ P2.3    IN3
+ P2.4    IN4
+ P2.5    EN5
+ P2.6    not used
+ P2.7    not used
+
+ */
+
+#include  <msp430g2553.h>
+
+unsigned int button = 0;
+
+void FWD();
+
+void main(void){
+
+    WDTCTL = WDTPW + WDTHOLD; // Stop Watchdog Timer
+
+    P1OUT =  BIT3;   	// Pullup for P1.3
+    P1REN |= BIT3;   	// Resistor enable for P1.3 position
+    P1IE |=  BIT3;   	// P1.3 interrupt enabled
+    P1IES |= BIT3;   	// P1.3 Hi/lo edge 1 -> 0
+    P1IFG &= ~0xFF; // clear ALL the Interrupt Flags on Port 1
+
+    P2OUT = 0x00u;
+
+    P2DIR |= BIT0;  // set P1.0 as output (ENA)
+    P2DIR |= BIT5;  // set P1.5 as output (ENB)
+    P2DIR |= BIT1;  // set P1.1 as output (IN1) right forward
+    P2DIR |= BIT2;  // set P1.2 as output (IN2) right reverse
+    P2DIR |= BIT3;  // set P1.3 as output (IN3) left reverse
+    P2DIR |= BIT4;  // set P1.4 as output (IN4) left forward
+
+    _BIS_SR(GIE);   // enable general interrupts
+
+    P2OUT ^= BIT0;  // enable Right Track
+    P2OUT ^= BIT5;  // enable Left Track
+
+    while(1){
+        if(button == 1){
+            FWD();
+        }
+        else
+            REV();
+    }
+
+}
+
+// Port 1 interrupt service routine
+#pragma vector=PORT1_VECTOR
+__interrupt void Port_1(void)
+{
+    button ^= 1;
+    P1IFG &= ~0xFF;  // clear ALL the Interrupt Flag bits on Port 1
+}
+
+
+
+void FWD(){
+    P2OUT ^= BIT1;  	// rt forw
+    P2OUT ^= BIT4;  	// lft forw
+    __delay_cycles(1800);
+	
+    P2OUT ^= BIT1;  	// rt forw
+    P2OUT ^= BIT4; 	// lft forw
+    __delay_cycles(200);
+}
+
+void REV(){
+    P2OUT ^= BIT2;	// rt rev
+    P2OUT ^= BIT3;	// lft rev
+    __delay_cycles(18);
+	
+    P2OUT ^= BIT2;	// rt rev
+    P2OUT ^= BIT3;	// lft rev
+    __delay_cycles(2);
+}
+
+/*
+void Left(){
+    P1OUT ^= BIT1;	// rt forw
+    P2OUT ^= BIT3;	// lft rev
+    __delay_cycles(18);
+    P1OUT ^= BIT1;	// rt forw
+    P2OUT ^= BIT3;	// lft rev
+    __delay_cycles(2);
+}
+
+void Right(){
+    P2OUT ^= BIT2;	// rt rev
+    P2OUT ^= BIT4;	// lft forw
+    __delay_cycles(18);
+    P2OUT ^= BIT2;	// rt rev
+    P2OUT ^= BIT4;	// lft forw
+    __delay_cycles(2);
+}
+*/
