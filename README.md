@@ -1,2 +1,2 @@
-# Project-Lab-3-Main
+# Project-Lab-3 Team: Burnout Squad
 Autonomous robot
