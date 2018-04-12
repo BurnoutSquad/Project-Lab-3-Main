@@ -21,25 +21,33 @@
 
 #include <SDL2/SDL.h>
 #include <SDL2_image/SDL_image.h>
-#include <SDL2_ttf/SDL_ttf.h>
+//#include <SDL2_ttf/SDL_ttf.h>
+
+#include <opencv2/opencv.hpp>
+//#include <opencv2/core.hpp>
+//#include <opencv2/imgproc.hpp>
+//#include <opencv2/highgui.hpp>
+//#include <opencv2/features2d.hpp>
 
 #include <curl/curl.h>
-
 
 using namespace std;
 
 const string SERIAL_PORT_DEVICE = "/dev/tty.Burnout_Squad-RNI-SPP"; // Define Serial Port
-const int baudRate = 9600;                      // Define Baud Rate
+const int baudRate = 9600; // Define Baud Rate
 
 const int width = 800, height = 600;
 
 
 void WriteToSerial(string input, int &FileDescriptor);
+string ReadFromSerial(int &fd);
 void OpenSerialDevice(int &FileDescriptor);
 void SetupSerial(termios &options, int &fd);
 void DownloadImage();
+void FindBlob(vector<cv::KeyPoint> &keypoints, cv::Ptr<cv::SimpleBlobDetector> &detector);
 
 int main( int argc, char** argv ){
+    
     // SERIAL PORT MANAGMENT
     int fd;
     struct termios options;
@@ -48,6 +56,43 @@ int main( int argc, char** argv ){
     
     SetupSerial(options, fd);
     
+    ////////////////////////////////////////////////////////////////////////////////////
+    
+    // Create Blob Detector with parameters & KeyPoints Vector
+    using namespace cv;
+    
+    SimpleBlobDetector::Params params;
+    
+    // Change thresholds
+    params.minThreshold = 10;
+    params.maxThreshold = 200;
+    
+    // Filter by Area.
+    params.filterByArea = true;
+    params.maxArea = 910000;
+    params.minArea = 75;
+    
+    // Filter by Circularity
+    params.filterByCircularity = true;
+    params.minCircularity = .1;
+    
+    // Filter by Convexity
+    params.filterByConvexity = true;
+    params.minConvexity = 0.75;
+    
+    // Filter by Inertia
+    params.filterByInertia = true;
+    params.minInertiaRatio = 0.01;
+    
+    // Filter by Color
+    params.filterByColor = true;
+    params.blobColor = 255;
+
+    Ptr<SimpleBlobDetector> detector = SimpleBlobDetector::create(params);
+    
+    // KeyPoints vector for Blob location data
+    vector<KeyPoint> keypoints;
+
     ////////////////////////////////////////////////////////////////////////////////////
     
     // SDL IMPLEMENTATION
@@ -68,12 +113,6 @@ int main( int argc, char** argv ){
     
     SDL_Renderer* renderer = SDL_CreateRenderer( window, -1, SDL_RENDERER_ACCELERATED);
     
-    // Set render color to light grey ( background will be rendered in this color )
-    //SDL_SetRenderDrawColor( renderer, 210, 210, 210, 255 );
-    
-    // Clear winow
-    //SDL_RenderClear( renderer );
-    
     // Creat rects (bars) at pos ( 50, 50 ) that's 50 pixels wide and 50 pixels high.
     SDL_Rect bar0;
     bar0.x = 0;
@@ -87,16 +126,6 @@ int main( int argc, char** argv ){
     bar1.w = 20;
     bar1.h = 380;
     
-    // Set render color to Grey ( rects will be rendered in this color )
-    //SDL_SetRenderDrawColor( renderer, 120, 120, 120, 255 );
-    
-    // Render rects
-    //SDL_RenderFillRect( renderer, &bar0 );
-    //SDL_RenderFillRect( renderer, &bar1 );
-    
-    // Render the rect to the screen
-    //SDL_RenderPresent(renderer);
-    
     // Show live camera image
     if( !( IMG_Init( IMG_INIT_JPG ) & IMG_INIT_JPG ) ){
         cout << "Could not initialize image: " << IMG_GetError( ) << endl;
@@ -109,54 +138,61 @@ int main( int argc, char** argv ){
     imageRect.w = 1280;
     imageRect.h = 720;
     
-    bool moving = false;
-    
     // Primary App Loop
+    
+    bool moving = false;
     SDL_Event windowEvent;
+    
+    SDL_Surface *imageSurface;
+    SDL_Texture *imageTexture;
+    
+    string recieved;
+    
+    int blobWait= 0;
+    
     while(true){
+        // Request to send and recieve data from MSP430
         
-        //KEYSTROKE TEST
+        //recieved = ReadFromSerial(fd);
+        
+        // KEYSTROKE TEST
         
         const Uint8* keystate = SDL_GetKeyboardState(NULL);
         
         if(keystate[SDL_SCANCODE_UP] || keystate[SDL_SCANCODE_W]){
             if(moving == false){
-                //WriteToSerial("s",fd);
+                WriteToSerial("w",fd);
                 cout<<"Sending Forward"<<endl;
                 moving = true;
             }
         }
         else if(keystate[SDL_SCANCODE_RIGHT] || keystate[SDL_SCANCODE_D]){
             if(moving == false){
-                //WriteToSerial("s",fd);
+                WriteToSerial("d",fd);
                 cout<<"Sending Right"<<endl;
                 moving = true;
             }
         }
         else if(keystate[SDL_SCANCODE_DOWN] || keystate[SDL_SCANCODE_S]){
             if(moving == false){
-                //WriteToSerial("s",fd);
+                WriteToSerial("s",fd);
                 cout<<"Sending Reverse"<<endl;
                 moving = true;
             }
         }
         else if(keystate[SDL_SCANCODE_LEFT] || keystate[SDL_SCANCODE_A]){
             if(moving == false){
-                //WriteToSerial("s",fd);
+                WriteToSerial("a",fd);
                 cout<<"Sending Left"<<endl;
                 moving = true;
             }
         }
         else if(moving == true){
-            //WriteToSerial("x",fd);
+            WriteToSerial("x",fd);
             cout<<"Sending Stop"<<endl;
             moving = false;
         }
 
-        
-        
-        
-        
         
         
         SDL_SetRenderDrawColor( renderer, 210, 210, 210, 255 );
@@ -169,8 +205,15 @@ int main( int argc, char** argv ){
         
         //DownloadImage();
         
-        SDL_Surface *imageSurface = IMG_Load("test.jpg");
-        SDL_Texture *imageTexture = SDL_CreateTextureFromSurface(renderer, imageSurface);
+        if(blobWait == 30){
+            blobWait = 0;
+            FindBlob(keypoints, detector);
+        }
+        else
+            blobWait++;
+
+        imageSurface = IMG_Load("test.jpg");
+        imageTexture = SDL_CreateTextureFromSurface(renderer, imageSurface);
         
         if(imageTexture)
             SDL_RenderCopy(renderer, imageTexture, nullptr, &imageRect);
@@ -184,105 +227,68 @@ int main( int argc, char** argv ){
                 break;
     }
     
+    // Close SDL elements
     SDL_DestroyWindow(window);
-    // SDL_DestroyTexture(imageTexture);
-    // SDL_FreeSurface(imageSurface);
+    SDL_DestroyTexture(imageTexture);
+    SDL_FreeSurface(imageSurface);
     IMG_Quit();
     SDL_Quit();
     
     ////////////////////////////////////////////////////////////////////////////////////
     
-    /*
-    
-     SDL Keystroke test code.. didnt work
-    
-    while(1){
-    
-    SDL_Event event;
-    
-    SDL_PollEvent(&event);
-    
-    if(event.type == SDL_KEYDOWN)
-    {
-        // Move centerpoint of rotation for one of the trees:
-        switch(event.key.keysym.sym)
-        {
-            case SDLK_UP:
-                WriteToSerial("w",fd);
-                cout<<"Sending Forward"<<endl;
-                break;
-            case SDLK_DOWN:
-                WriteToSerial("s",fd);
-                cout<<"Sending Reverse"<<endl;
-                break;
-            case SDLK_LEFT:
-                WriteToSerial("a",fd);
-                cout<<"Sending Left"<<endl;
-                break;
-            case SDLK_RIGHT:
-                WriteToSerial("d",fd);
-                cout<<"Sending Right"<<endl;
-                break;
-            case SDLK_w:
-                WriteToSerial("w",fd);
-                cout<<"Sending Forward"<<endl;
-                break;
-            case SDLK_a:
-                WriteToSerial("a",fd);
-                cout<<"Sending Right"<<endl;
-                break;
-            case SDLK_s:
-                WriteToSerial("s",fd);
-                cout<<"Sending Left"<<endl;
-                break;
-            case SDLK_d:
-                WriteToSerial("d",fd);
-                cout<<"Sending Reverse"<<endl;
-                break;
-            case SDLK_SPACE:
-                WriteToSerial("x",fd);
-                cout<<"Sending Stop"<<endl;
-            case SDLK_ESCAPE:
-                cout<<"Exiting Program!"<<endl;
-                close(fd);
-                return 0;
-            default:
-                break;
-        }
-    }
-    
-    }
-     */
-    /*
-     
-     Read code: Should work.. not fast enough??
-     Need to implement call for read on bluesmirf device
-     
-    unsigned char buf[256];
-    memset (&buf, '\0', sizeof buf);
-     
-    // *** READ ***
-    long n = read( fd, buf , sizeof buf );
-    
-    // Error Handling
-    if (n < 0)
-    {
-        cout << "Error reading: " << strerror(errno) << endl;
-    }
-    cout<<n<<endl;
-    // Print what I read...
-    cout << "Read: " << buf << endl;
-
-     */
-    
     close(fd);
-    
     return 0;
 }
 
 //
 // FUNCTIONS
 //
+
+
+void FindBlob( vector<cv::KeyPoint> &keypoints, cv::Ptr<cv::SimpleBlobDetector> &detector){
+    using namespace cv;
+    
+    // Read image
+    Mat im = imread( "test.jpg", IMREAD_COLOR );
+    
+    inRange(im, Scalar(30, 70, 0), Scalar(150, 200, 30), im);
+    
+    detector->detect( im, keypoints);
+    
+    // Code to draw blobs onto image
+    //Mat im_with_keypoints;
+    //drawKeypoints( im, keypoints, im_with_keypoints, Scalar(0,0,255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS );
+    
+    // Code to output resultant image
+    //imwrite("result.jpg", im_with_keypoints);
+    
+    
+    // Draw detected blobs as red circles.
+    // DrawMatchesFlags::DRAW_RICH_KEYPOINTS flag ensures the size of the circle corresponds to the size of blob
+    
+    for(int i=0; i<keypoints.size();i++){
+        cout<<keypoints[i].pt.x<<endl;
+        cout<<keypoints[i].pt.y<<endl;
+        cout<<keypoints[i].angle<<endl;
+        cout<<keypoints[i].size<<endl;
+    }
+    
+    
+    if(keypoints.size()>0){
+        cout<<"Blob Detected"<<endl;
+        if(keypoints[0].pt.x > 800 && keypoints[0].pt.x < 1280){
+            //NEED TO ADD SIZE DEPENDANCY
+            WriteToSerial('RIGHT', fd);
+            usleep(10000);
+            WriteToSerial('STOP', fd);
+        }
+        else if(keypoints[0].pt.x > 0 && keypoints[0].pt.x < 480){
+            WriteToSerial('LEFT', fd);
+            usleep(10000);
+            WriteToSerial('STOP', fd);
+        }
+    }
+}
 
 void DownloadImage(){
     CURL *image;
@@ -326,6 +332,35 @@ void WriteToSerial(string input, int &FileDescriptor){
     
     write(FileDescriptor, cmd, input.length());
     
+}
+
+string ReadFromSerial(int &fd){
+    string temp;
+    
+    unsigned char *buf;
+    buf = (unsigned char*)calloc(256, sizeof(buf));
+    
+    WriteToSerial("r", fd);
+    
+    usleep(10000);
+    
+    // *** READ ***
+    long n = read( fd, buf , sizeof buf );
+    
+    // Error Handling
+    if (n < 0)
+    {
+        cout << "Error reading: " << strerror(errno) << endl;
+    }
+    cout<<n<<endl;
+    // Print what I read...
+    cout << "Read: " << buf << endl;
+    
+    for(int i=0; i<sizeof buf; i++){
+        temp[i] = buf[i];
+    }
+    
+    return temp;
 }
 
 void OpenSerialDevice(int &FileDescriptor){
