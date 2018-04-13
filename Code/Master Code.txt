@@ -1,0 +1,127 @@
+#include "msp430g2553.h"
+
+unsigned char LED1_Data = '1';
+unsigned char LED2_Data = '2';
+unsigned char SERVO1_Data = '3';
+unsigned char SERVO2_Data = '4';
+unsigned char SERVO3_Data = '5';
+unsigned char LED_set;
+static char data;
+
+void main(void)
+{
+    WDTCTL = WDTPW + WDTHOLD;                 // Stop watchdog timer
+
+    // configure the CPU clock (MCLK)
+    // to run from DCO @ 16MHz and SMCLK = DCO / 4
+
+    BCSCTL1 = CALBC1_16MHZ; // Set DCO
+    DCOCTL = CALDCO_16MHZ;
+    BCSCTL2= DIVS_2 + DIVM_0; // divider=4 for SMCLK and 1 for MCLK
+    //P1IE |= BIT3;        // enable button interrupt
+    //P1IFG &= ~BIT3;       // clear interrupt flag
+    //P1OUT &= ~BIT0;       // Turn LEDS off
+    //P1OUT &= ~BIT6;
+    P1DIR |= BIT3 + BIT4;              // Set directions for LEDS and SS
+    P1SEL = BIT1 + BIT2 + BIT5 + BIT6 + BIT7;    // Selecting secondary peripherals for pins
+    P1SEL2 = BIT1 + BIT2 + BIT5 + BIT6 + BIT7;
+
+    // configure the UART
+
+    UCA0CTL0 = 0; //UART mode, No parity, LSB first, 8 data, 1 stop
+    UCA0CTL1 = UCSSEL_2; //use SCLK
+    UCA0BR0 = 0x1A; //lower byte of UCBR0. 26dec
+                   //(4MHz / 9600 baud)  see table 15-5
+    UCA0BR1 = 0x0; //upper byte of UCBR0.set to 0
+    UCA0MCTL = UCBRF_1 + UCBRS_0 + UCOS16; //sets UCBRFx to 1,
+                                   // UCBRSx tto 0 , UCOS16=1
+    UCA0CTL1 &= ~UCSWRST; // **Initialize USCI **
+
+    UCB0CTL1 = UCSWRST;
+    UCB0CTL0 |= UCCKPL + UCMSB + UCMST + UCSYNC;  // Setting up SPI master
+    UCB0CTL1 |= UCSSEL_2;                     // SMCLK
+    UCB0BR0 |= 0x02;                          // /2 is prescaler value for clock
+    UCB0BR1 = 0;                              //
+    //UCB0TXIE = 1;                             // enable USCI_B0 interrupt
+    UCB0CTL1 &= ~UCSWRST;                     // Initialize USCI
+    P1OUT |= BIT3 + BIT4;       // Tell slave to turn on
+    UC0IE |= UCA0RXIE; // Enable USCI_A1 RX interrupt
+    _EINT(); // global enable interrupts
+    while (1); // process is managed by the interrupt vector
+    //__bis_SR_register(LPM0_bits + GIE);       // Low power Mode 0, enable interrupts
+ }
+
+#pragma vector=USCIAB0RX_VECTOR
+__interrupt void USCI0RX_ISR(void)
+{
+    data = UCA0RXBUF;
+
+        switch (data)
+        {
+            case '1':
+                Send("LED1 \r\n");
+                setLED(LED1_Data);
+            break;
+
+            case '2':
+                Send("LED2 \r\n");
+                setLED(LED2_Data);
+            break;
+
+            case '3':
+                Send("SERVO1 \r\n");
+                setSERVO(SERVO1_Data);
+            break;
+
+            case '4':
+                Send("SERVO2 \r\n");
+                setSERVO(SERVO2_Data);
+            break;
+
+            case '5':
+                Send("SERVO3 \r\n");
+                setSERVO(SERVO3_Data);
+            break;
+
+            default:
+                Send("Unknown Command \r\n");
+            break;
+       }
+
+}
+
+void Send(char * tx_data) // Send Out TX
+{
+    unsigned int i=0;
+
+    while(tx_data[i]) // Increment
+    {
+        while ((UCA0STAT & UCBUSY)); // Wait
+        UCA0TXBUF = tx_data[i]; // Send out element
+        i++;
+    }
+}
+
+// SPI function for sending data from Master MCU to MCU1 through P.4
+void setLED(unsigned char dataOut)
+{
+    P1OUT &= ~BIT4;                // enable slave (CS to Low)
+    UCB0TXBUF = 0;                 // Send command
+    while (!(IFG2 & UCB0TXIFG));   // wait for TX buffer ready
+    UCB0TXBUF = dataOut;           // Send data from UART
+    while (!(IFG2 & UCB0TXIFG));   // wait for TX buffer ready
+    while (UCB0STAT & UCBUSY);     // wait for the TX to complete
+    P1OUT |= BIT4;                 // disable Slave (CS to High)
+}
+
+// SPI function for sending data from Master MCU to MCU2 through P.3
+void setSERVO(unsigned char dataOut)
+{
+    P1OUT &= ~BIT3;                // enable slave (CS to Low)
+    UCB0TXBUF = 0;                 // Send command
+    while (!(IFG2 & UCB0TXIFG));   // wait for TX buffer ready
+    UCB0TXBUF = dataOut;           // Send wiper level
+    while (!(IFG2 & UCB0TXIFG));   // wait for TX buffer ready
+    while (UCB0STAT & UCBUSY);     // wait for the tx to complete
+    P1OUT |= BIT3;                 // disable Slave (CS to High)
+}
