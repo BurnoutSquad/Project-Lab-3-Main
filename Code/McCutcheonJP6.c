@@ -119,6 +119,10 @@ __interrupt void UART_TX_ISR()
 }
 
 
+#pragma vector=USCIAB0RX_VECTOR  // Receive UART interrupt
+__interrupt void USCI0RX_ISR(void)
+{
+    data = UCA0RXBUF;
 
     txArray[13] = data;
     txIndex = 1;
