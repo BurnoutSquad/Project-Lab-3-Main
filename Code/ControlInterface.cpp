@@ -34,27 +34,37 @@
 using namespace std;
 
 const string SERIAL_PORT_DEVICE = "/dev/tty.Burnout_Squad-RNI-SPP"; // Define Serial Port
+const string Flag1 = "/dev/tty.FLAG_1-RNI-SPP"; // Define Serial Port
+const string Flag2 = "/dev/tty.RNBT-0BA1-RNI-SPP"; // Define Serial Port
+const string Flag3 = "/dev/tty.RNBT-0653-RNI-SPP"; // Define Serial Port
 const int baudRate = 9600; // Define Baud Rate
 
 const int width = 800, height = 600;
 
+int fd;
+int fd1;
+int fd2;
+int fd3;
 
-void WriteToSerial(string input, int &FileDescriptor);
-string ReadFromSerial(int &fd);
-void OpenSerialDevice(int &FileDescriptor);
-void SetupSerial(termios &options, int &fd);
+void WriteToSerial(string input);
+string ReadFromSerial();
+void OpenSerialDevice(string Device);
+void SetupSerial(termios &options);
 void DownloadImage();
 void FindBlob(vector<cv::KeyPoint> &keypoints, cv::Ptr<cv::SimpleBlobDetector> &detector);
 
 int main( int argc, char** argv ){
     
     // SERIAL PORT MANAGMENT
-    int fd;
+    
     struct termios options;
     
-    //OpenSerialDevice(fd);
+    OpenSerialDevice(SERIAL_PORT_DEVICE);
+    //OpenSerialDevice(fd1,Flag1);
+    //OpenSerialDevice(fd2,Flag2);
+    //OpenSerialDevice(fd3,Flag3);
     
-    SetupSerial(options, fd);
+    SetupSerial(options);
     
     ////////////////////////////////////////////////////////////////////////////////////
     
@@ -70,19 +80,19 @@ int main( int argc, char** argv ){
     // Filter by Area.
     params.filterByArea = true;
     params.maxArea = 910000;
-    params.minArea = 75;
+    params.minArea = 100;
     
     // Filter by Circularity
-    params.filterByCircularity = true;
-    params.minCircularity = .1;
+    params.filterByCircularity = false;
+    params.minCircularity = .3;
     
     // Filter by Convexity
     params.filterByConvexity = true;
-    params.minConvexity = 0.75;
+    params.minConvexity = 0.65;
     
     // Filter by Inertia
     params.filterByInertia = true;
-    params.minInertiaRatio = 0.01;
+    params.minInertiaRatio = 0.4;
     
     // Filter by Color
     params.filterByColor = true;
@@ -148,7 +158,9 @@ int main( int argc, char** argv ){
     
     string recieved;
     
-    int blobWait= 0;
+    bool blob = true;
+    
+    const Uint8* keystate;
     
     while(true){
         // Request to send and recieve data from MSP430
@@ -157,43 +169,59 @@ int main( int argc, char** argv ){
         
         // KEYSTROKE TEST
         
-        const Uint8* keystate = SDL_GetKeyboardState(NULL);
+        keystate = SDL_GetKeyboardState(NULL);
         
         if(keystate[SDL_SCANCODE_UP] || keystate[SDL_SCANCODE_W]){
             if(moving == false){
-                WriteToSerial("w",fd);
+                WriteToSerial("w");
                 cout<<"Sending Forward"<<endl;
+                blob = false;
                 moving = true;
             }
         }
         else if(keystate[SDL_SCANCODE_RIGHT] || keystate[SDL_SCANCODE_D]){
             if(moving == false){
-                WriteToSerial("d",fd);
+                WriteToSerial("d");
                 cout<<"Sending Right"<<endl;
+                blob = false;
                 moving = true;
             }
         }
         else if(keystate[SDL_SCANCODE_DOWN] || keystate[SDL_SCANCODE_S]){
             if(moving == false){
-                WriteToSerial("s",fd);
+                WriteToSerial("s");
                 cout<<"Sending Reverse"<<endl;
+                blob = false;
                 moving = true;
             }
         }
         else if(keystate[SDL_SCANCODE_LEFT] || keystate[SDL_SCANCODE_A]){
             if(moving == false){
-                WriteToSerial("a",fd);
+                WriteToSerial("a");
                 cout<<"Sending Left"<<endl;
+                blob = false;
                 moving = true;
             }
         }
+        else if(keystate[SDL_SCANCODE_1]){
+            if(moving == false){
+                WriteToSerial("1");
+                blob = true;
+                cout<<"Servo Arm"<<endl;
+            }
+        }
+        else if(keystate[SDL_SCANCODE_Z]){
+            if(moving == false){
+                WriteToSerial("z");
+                blob = true;
+                cout<<"Exiting Manual Mode"<<endl;
+            }
+        }
         else if(moving == true){
-            WriteToSerial("x",fd);
+            WriteToSerial("x");
             cout<<"Sending Stop"<<endl;
             moving = false;
         }
-
-        
         
         SDL_SetRenderDrawColor( renderer, 210, 210, 210, 255 );
         
@@ -203,15 +231,11 @@ int main( int argc, char** argv ){
         SDL_RenderFillRect( renderer, &bar0 );
         SDL_RenderFillRect( renderer, &bar1 );
         
-        //DownloadImage();
+        DownloadImage();
         
-        if(blobWait == 30){
-            blobWait = 0;
+        if(blob)
             FindBlob(keypoints, detector);
-        }
-        else
-            blobWait++;
-
+        
         imageSurface = IMG_Load("test.jpg");
         imageTexture = SDL_CreateTextureFromSurface(renderer, imageSurface);
         
@@ -225,6 +249,8 @@ int main( int argc, char** argv ){
         if(SDL_PollEvent(&windowEvent))
             if(SDL_QUIT == windowEvent.type)
                 break;
+        SDL_DestroyTexture(imageTexture);
+        SDL_FreeSurface(imageSurface);
     }
     
     // Close SDL elements
@@ -237,6 +263,9 @@ int main( int argc, char** argv ){
     ////////////////////////////////////////////////////////////////////////////////////
     
     close(fd);
+    close(fd1);
+    close(fd2);
+    close(fd3);
     return 0;
 }
 
@@ -250,44 +279,160 @@ void FindBlob( vector<cv::KeyPoint> &keypoints, cv::Ptr<cv::SimpleBlobDetector> 
     
     // Read image
     Mat im = imread( "test.jpg", IMREAD_COLOR );
+    Mat original = im;
     
-    inRange(im, Scalar(30, 70, 0), Scalar(150, 200, 30), im);
+    inRange(im, Scalar(70, 90, 10), Scalar(200, 255, 60), im);
     
     detector->detect( im, keypoints);
     
     // Code to draw blobs onto image
     //Mat im_with_keypoints;
-    //drawKeypoints( im, keypoints, im_with_keypoints, Scalar(0,0,255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS );
+    drawKeypoints( im, keypoints, im, Scalar(0,0,255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS );
+    imwrite("result.jpg", im);
+    
+    drawKeypoints( original, keypoints, im, Scalar(0,0,255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS );
     
     // Code to output resultant image
-    //imwrite("result.jpg", im_with_keypoints);
+    imwrite("test.jpg", im);
     
     
     // Draw detected blobs as red circles.
     // DrawMatchesFlags::DRAW_RICH_KEYPOINTS flag ensures the size of the circle corresponds to the size of blob
     
-    for(int i=0; i<keypoints.size();i++){
-        cout<<keypoints[i].pt.x<<endl;
-        cout<<keypoints[i].pt.y<<endl;
-        cout<<keypoints[i].angle<<endl;
-        cout<<keypoints[i].size<<endl;
-    }
-    
-    
     if(keypoints.size()>0){
         cout<<"Blob Detected"<<endl;
-        if(keypoints[0].pt.x > 800 && keypoints[0].pt.x < 1280){
-            //NEED TO ADD SIZE DEPENDANCY
-            WriteToSerial('RIGHT', fd);
-            usleep(10000);
-            WriteToSerial('STOP', fd);
+        
+        for(int i=0; i<keypoints.size();i++){
+            cout<<"x value: "<<keypoints[i].pt.x<<endl;
+            cout<<"y value: "<<keypoints[i].pt.y<<endl;
+            cout<<"size: "<<keypoints[i].size<<endl;
         }
-        else if(keypoints[0].pt.x > 0 && keypoints[0].pt.x < 480){
-            WriteToSerial('LEFT', fd);
-            usleep(10000);
-            WriteToSerial('STOP', fd);
+        
+        /*
+         These functions utilize usleep(u-seconds);
+         1/1,000,000 of a second:
+         100,000: 1/10 second
+         500,000: 1/2 second
+         1,000,000: 1 second
+        */
+        
+        // Cases detect blob size
+        // blobs size 0-100
+        
+        int bigBlob = 0;
+        
+        for(int i=0; i<keypoints.size(); i++){
+            if(keypoints[i].size > bigBlob)
+                bigBlob = i;
+        }
+        
+        
+        if(keypoints[bigBlob].size >= 1 && keypoints[bigBlob].size < 100){
+            WriteToSerial("w"); // Forward
+            usleep(300000);
+            WriteToSerial("x"); // Stop
+            if(keypoints[bigBlob].pt.x > 800 && keypoints[bigBlob].pt.x < 1280){
+                WriteToSerial("d"); // Right
+                usleep(250000);
+                WriteToSerial("x"); // Stop
+            }
+            else if(keypoints[bigBlob].pt.x > 0 && keypoints[bigBlob].pt.x < 480){
+                WriteToSerial("a"); // Left
+                usleep(250000);
+                WriteToSerial("x"); // Stop
+            }
+            else
+                WriteToSerial("x"); // Stop
+            usleep(500000); // Wait for image to stabilize
+        }
+        
+        // blobs size 100-200
+        else if(keypoints[bigBlob].size >= 100 && keypoints[bigBlob].size < 200){
+            WriteToSerial("w"); // Forward
+            usleep(250000);
+            WriteToSerial("x"); // Stop
+            if(keypoints[bigBlob].pt.x > 800 && keypoints[bigBlob].pt.x < 1280){
+                WriteToSerial("d"); // Right
+                usleep(200000);
+                WriteToSerial("x"); // Stop
+            }
+            else if(keypoints[bigBlob].pt.x > 0 && keypoints[bigBlob].pt.x < 480){
+                WriteToSerial("a"); // Left
+                usleep(200000);
+                WriteToSerial("x"); // Stop
+            }
+            else
+                WriteToSerial("x"); // Stop
+            usleep(500000); // Wait for image to stabilize
+        }
+        
+        // blobs size 200-300
+        else if(keypoints[bigBlob].size >= 200 && keypoints[bigBlob].size < 300){
+            WriteToSerial("w"); // Forward
+            usleep(200000);
+            WriteToSerial("x"); // Stop
+            if(keypoints[bigBlob].pt.x > 800 && keypoints[bigBlob].pt.x < 1280){
+                WriteToSerial("d"); // Right
+                usleep(150000);
+                WriteToSerial("x"); // Stop
+            }
+            else if(keypoints[bigBlob].pt.x > 0 && keypoints[bigBlob].pt.x < 480){
+                WriteToSerial("a"); // Left
+                usleep(150000);
+                WriteToSerial("x"); // Stop
+            }
+            else
+                WriteToSerial("x"); // Stop
+            usleep(500000); // Wait for image to stabilize
+        }
+        
+        // blobs size 300-350
+        else if(keypoints[bigBlob].size >= 300 && keypoints[bigBlob].size < 400){
+            WriteToSerial("w"); // Forward
+            usleep(150000);
+            WriteToSerial("x"); // Stop
+            if(keypoints[bigBlob].pt.x > 800 && keypoints[bigBlob].pt.x < 1280){
+                WriteToSerial("d"); // Right
+                usleep(100000);
+                WriteToSerial("x"); // Stop
+            }
+            else if(keypoints[bigBlob].pt.x > 0 && keypoints[bigBlob].pt.x < 480){
+                WriteToSerial("a"); // Left
+                usleep(100000);
+                WriteToSerial("x"); // Stop
+            }
+            else
+                WriteToSerial("x"); // Stop
+            usleep(500000); // Wait for image to stabilize
+        }
+        
+        // blobs size 350-400
+        else if(keypoints[bigBlob].size >= 400 && keypoints[bigBlob].size < 475){
+            WriteToSerial("w"); // Forward
+            usleep(100000);
+            WriteToSerial("x"); // Stop
+            if(keypoints[bigBlob].pt.x > 800 && keypoints[bigBlob].pt.x < 1280){
+                WriteToSerial("d"); // Right
+                usleep(50000);
+                WriteToSerial("x"); // Stop
+            }
+            else if(keypoints[bigBlob].pt.x > 0 && keypoints[bigBlob].pt.x < 480){
+                WriteToSerial("a"); // Left
+                usleep(50000);
+                WriteToSerial("x"); // Stop
+            }
+            else
+                WriteToSerial("x"); // Stop
+            usleep(500000); // Wait for image to stabilize
+        }
+        
+        // blob size > 400
+        else if(keypoints[bigBlob].size >= 475 && keypoints[bigBlob].pt.x > 480 && keypoints[bigBlob].pt.x < 800){
+            WriteToSerial("1");
+            usleep(9000000);
         }
     }
+    
 }
 
 void DownloadImage(){
@@ -323,24 +468,24 @@ void DownloadImage(){
 }
 
 
-void WriteToSerial(string input, int &FileDescriptor){
+void WriteToSerial(string input){
     unsigned char cmd[input.length()];
     
     for(int i=0; i<input.length(); i++){
         cmd[i]=input[i];
     }
     
-    write(FileDescriptor, cmd, input.length());
+    write(fd, cmd, input.length());
     
 }
 
-string ReadFromSerial(int &fd){
+string ReadFromSerial(){
     string temp;
     
     unsigned char *buf;
     buf = (unsigned char*)calloc(256, sizeof(buf));
     
-    WriteToSerial("r", fd);
+    WriteToSerial("r");
     
     usleep(10000);
     
@@ -363,22 +508,23 @@ string ReadFromSerial(int &fd){
     return temp;
 }
 
-void OpenSerialDevice(int &FileDescriptor){
+void OpenSerialDevice(string device){
     
-    FileDescriptor = open(SERIAL_PORT_DEVICE.c_str(),O_RDWR);
-    if ( -1 == FileDescriptor ){
+    fd = open(device.c_str(),O_RDWR);
+    if ( -1 == fd ){
         cerr << "Failed to open the serial port device "
-        << SERIAL_PORT_DEVICE
+        << device
         << endl ;
         exit(-1);
         }
     else{
         cerr << "Serial port device opened successfully."
+        << device
         << endl ;
     }
 }
 
-void SetupSerial(termios &options, int &fd){
+void SetupSerial(termios &options){
     fcntl(fd, F_SETFL, FNDELAY);                    // Open the device in nonblocking mode
     
     // Set parameters
